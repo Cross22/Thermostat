@@ -43,45 +43,37 @@ bool bHeaterButtonOn = true;
 
 TS_Point dialCenter;
 
-// Scratch RAM from Temperature sensor (9 bytes)
-void readScratch(byte* dataOut) {
+void startTempReading() {
+    onewire.reset();
+    onewire.skip();             // broadcast to all devices on bus
+    onewire.write(CMD_READTEMP);
+}
+
+// Take temperature scratchpad data and convert to
+// fahrenheit. 
+float parseTemperature() {
+    byte data[9];
     onewire.reset();
     onewire.skip();             // broadcast to all devices on bus
     onewire.write(CMD_READSCRATCH);         // Read Scratchpad  
 
     for (int i = 0; i < 9; i++) {           // we need 9 bytes
-        dataOut[i] = onewire.read();
+        data[i] = onewire.read();
     }
-}
 
-// 10-bit ADC temperature is fine (provide 9byte buffer)
-void setSensorResolution(byte* data) {
-    onewire.reset();
-    onewire.skip();             // broadcast to all devices on bus
-    onewire.write(CMD_WRITESCRATCH);
 
-    // this changes ADC mode to 10-bit
-    data[4] = 63;
-    for (int i = 2; i < 5; i++) {           // we need bytes 2,3,4
-        onewire.write(data[i]);
-    }
-}
-
-// Take temperature scratchpad data and convert to
-// fahrenheit. 
-float parseTemperature(byte* data) {
     // Convert the data to actual temperature
     // because the result is a 16 bit signed integer, it should
     // be stored to an "int16_t" type, which is always 16 bits
     // even when compiled on a 32 bit processor.
     int16_t raw = (data[1] << 8) | data[0];
-    byte cfg = (data[4] & 0x60);
+    //byte cfg = (data[4] & 0x60);
     // at lower res, the low bits are undefined, so let's zero them
     //  if (cfg == 0x00) raw = raw & ~7;  // 9 bit resolution, 93.75 ms
     //else if (cfg == 0x20) 
-    raw = raw & ~3; // 10 bit res, 187.5 ms
-                    //else if (cfg == 0x40) raw = raw & ~1; // 11 bit res, 375 ms
-                    //// default is 12 bit resolution, 750 ms conversion time
+    //raw = raw & ~3; // 10 bit res, 187.5 ms
+    //else if (cfg == 0x40) raw = raw & ~1; // 11 bit res, 375 ms
+    //// default is 12 bit resolution, 750 ms conversion time
 
     float celsius = (float)raw / 16.0;
     return celsius * 1.8 + 32.0;
@@ -89,22 +81,27 @@ float parseTemperature(byte* data) {
 
 void setupTempSensor(void) {
     byte data[9];
-    readScratch(data);
-    setSensorResolution(data);
+    startTempReading();
+    while (!onewire.read())
+        ; // wait until it's done
+
+    currentTemp = parseTemperature();
+
+    // Start next cycle for async processing
+    startTempReading();
 }
 
-// Returns fahrenheit- takes 200ms to read
-// TODO: TERRIBLE BLOCKING CODE. MAKE ASYNC
+// Returns fahrenheit gets updated every 700ms or so
 float getTemperatureF() {
-    byte data[9];
+    // Still busy converting?
+    if (!onewire.read())
+        return currentTemp;
 
-    onewire.reset();
-    onewire.skip();             // broadcast to all devices on bus
-    onewire.write(CMD_READTEMP);
-    delay(200);     // 10-bit ADC duration
+    float f = parseTemperature();
 
-    readScratch(data);
-    return parseTemperature(data);
+    // start next cycle
+    startTempReading();
+    return f;
 }
 
 // Connect Redbear BLE Mini to +5 and GND
@@ -230,8 +227,8 @@ void printDigits(int digits)
 
 void printClock(void)
 {
-    time_t t = now(); 
-  
+    time_t t = now();
+
     // digital clock display of the time
     Serial.print(hour(t));
     printDigits(minute(t));
@@ -348,11 +345,12 @@ void loop()
     // If there is no touch do regular temperature processing
     if (!ctp.touched()) {
         touchReleased = true;
-        
+
         currentTemp = getTemperatureF();
-        processHeating();        
+        processHeating();
         diagnosticOutput();
-    } else {
+    }
+    else {
         // interactive mode - don't bother reading temperature
         processTouchScreen();
     }
