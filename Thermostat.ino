@@ -94,6 +94,7 @@ void setupTempSensor(void) {
 }
 
 // Returns fahrenheit- takes 200ms to read
+// TODO: TERRIBLE BLOCKING CODE. MAKE ASYNC
 float getTemperatureF() {
     byte data[9];
 
@@ -182,7 +183,7 @@ void setupGfx()
 {
     tft.begin();
 
-    Serial.print(F("SD card?"));
+    Serial.print("SD card?");
     if (!SD.begin(SD_CS)) {
         Serial.println("ERR");
     }
@@ -194,7 +195,7 @@ void setupGfx()
     drawDial(100 + 25, 27 + 25);
 
     if (!ctp.begin(40)) { // pass in 'sensitivity' coefficient
-        Serial.println(F("Touch Error"));
+        Serial.println("Touch ERR");
     }
 }
 
@@ -229,23 +230,25 @@ void printDigits(int digits)
 
 void printClock(void)
 {
+    time_t t = now(); 
+  
     // digital clock display of the time
-    Serial.print(hour());
-    printDigits(minute());
-    printDigits(second());
-    Serial.print(' ');
-    Serial.print(day());
-    Serial.print(' ');
-    Serial.print(month());
-    Serial.print(' ');
-    Serial.print(year());
+    Serial.print(hour(t));
+    printDigits(minute(t));
+    printDigits(second(t));
+    Serial.print(',');
+    Serial.print(day(t));
+    Serial.print(',');
+    Serial.print(month(t));
+    Serial.print(',');
+    Serial.print(year(t));
     Serial.println();
 }
 
-void processOutput()
+void diagnosticOutput()
 {
     Serial.print(currentTemp);
-    Serial.println(" F  ");
+    Serial.print(',');
     printClock();
 }
 
@@ -304,16 +307,11 @@ void onToggleHeater()
     //heatoff.fsf top left corner is 62,215
 }
 
+// Has user lifted finger or are we still dragging?
+bool touchReleased = true;
+
 void processTouchScreen()
 {
-    static bool touchReleased = true;
-    // Wait for a touch
-    if (!ctp.touched()) {
-        touchReleased = true;
-        return;
-    }
-
-    // TODO: Add Debouncing!!!
     TS_Point p = ctp.getPoint();
     // flip it around to match the screen.
     p.x = map(p.x, 0, 240, 240, 0);
@@ -345,13 +343,17 @@ void processTouchScreen()
 
 void loop()
 {
+    processNetwork();
+
+    // If there is no touch do regular temperature processing
     if (!ctp.touched()) {
+        touchReleased = true;
+        
         currentTemp = getTemperatureF();
-        processHeating();
-    }
-    else {
-        processNetwork();
-        processOutput();
+        processHeating();        
+        diagnosticOutput();
+    } else {
+        // interactive mode - don't bother reading temperature
         processTouchScreen();
     }
 }
@@ -371,7 +373,7 @@ void fsfDrawDial(uint8_t x, uint16_t y)
     }
     else {
         if ((bmpFile = SD.open("dial.fsf")) == NULL) {
-            Serial.println(F("ERR-Dial"));
+            Serial.println("ERR-Dial");
             return;
         }
         w = read16(bmpFile);
@@ -403,7 +405,7 @@ void fsfDraw(const char* filename, uint8_t x, uint16_t y)
     uint32_t startTime = millis();
 
     if ((bmpFile = SD.open(filename)) == NULL) {
-        Serial.print(F("ERR:"));
+        Serial.print("ERR:");
         Serial.println(filename);
         return;
     }
