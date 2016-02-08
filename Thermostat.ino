@@ -413,9 +413,11 @@ void processTouchScreen()
     p.x= 65*cos(angle)+120; p.y= -65*sin(angle)+110;
     drawDial(p.x, p.y);
 
-    
-    overrideTemp= static_cast<int>(65.0f + percent*20.0f);
-    drawDesiredTemp();
+    uint8_t newTemp= static_cast<uint8_t>(65.0f + percent*20.0f);
+    if (newTemp!=overrideTemp) {
+      overrideTemp= newTemp;
+      drawDesiredTemp();
+    }
 }
 
 void loop()
