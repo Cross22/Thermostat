@@ -36,10 +36,15 @@ Adafruit_FT6206 ctp = Adafruit_FT6206();
 OneWire  onewire(TEMP_PIN);  // on pin A2 (needs a 4.7K pull up resistor !)
 Adafruit_ILI9341 tft = Adafruit_ILI9341(TFT_CS, TFT_DC);
 
-float currentTemp = 0;
+// currentTemp is latest reading from sensor
+// overrideTemp is either 0 or something selected via dial on screen
+uint8_t currentTemp = 0;
+uint8_t overrideTemp = 0;
 
 bool bFanButtonOn = false;
 bool bHeaterButtonOn = true;
+
+char digitFile[]= "blX.fsf";
 
 TS_Point dialCenter;
 
@@ -51,7 +56,7 @@ void startTempReading() {
 
 // Take temperature scratchpad data and convert to
 // fahrenheit. 
-float parseTemperature() {
+uint8_t parseTemperature() {
     byte data[9];
     onewire.reset();
     onewire.skip();             // broadcast to all devices on bus
@@ -75,8 +80,8 @@ float parseTemperature() {
     //else if (cfg == 0x40) raw = raw & ~1; // 11 bit res, 375 ms
     //// default is 12 bit resolution, 750 ms conversion time
 
-    float celsius = (float)raw / 16.0;
-    return celsius * 1.8 + 32.0;
+    const float celsius = (float)raw / 16.0;
+    return static_cast<int>(celsius * 1.8 + 32.0);
 }
 
 void setupTempSensor(void) {
@@ -92,12 +97,12 @@ void setupTempSensor(void) {
 }
 
 // Returns fahrenheit gets updated every 700ms or so
-float getTemperatureF() {
+uint8_t getTemperatureF() {
     // Still busy converting?
     if (!onewire.read())
         return currentTemp;
 
-    float f = parseTemperature();
+    uint8_t f = parseTemperature();
 
     // start next cycle
     startTempReading();
@@ -176,6 +181,40 @@ void drawDial(int x, int y)
     dialCenter.x = x; dialCenter.y = y;
 }
 
+void drawCurrentTemp() 
+{
+   const uint8_t iTemp= currentTemp;
+   const uint8_t tens=iTemp/10;
+   const uint8_t ones=iTemp%10;
+
+   // update filename to match digit
+   digitFile[0]= 'b'; digitFile[1]= 'l';
+   digitFile[2]= '0' + tens;
+   fsfDraw(digitFile, 84, 276 );
+
+   digitFile[0]= 'b'; digitFile[1]= 'r';
+   digitFile[2]= '0' + ones;
+   fsfDraw(digitFile, 113, 276 );
+}
+
+void drawDesiredTemp()
+{
+   const uint8_t iTemp= getDesiredTemperatureF();
+   const uint8_t tens=iTemp/10;
+   const uint8_t ones=iTemp%10;
+
+    // TODO: Generate 't' image files!
+    
+   // update filename to match digit
+   digitFile[0]= 'b'; digitFile[1]= 'l';
+   digitFile[2]= '0' + tens;
+   fsfDraw(digitFile, 84, 90 );
+
+   digitFile[0]= 'b'; digitFile[1]= 'r';
+   digitFile[2]= '0' + ones;
+   fsfDraw(digitFile, 113, 90 );  
+}
+
 void setupGfx()
 {
     tft.begin();
@@ -191,6 +230,9 @@ void setupGfx()
     // Dial is 50x50 big
     drawDial(100 + 25, 27 + 25);
 
+    drawDesiredTemp();
+    drawCurrentTemp();
+
     if (!ctp.begin(40)) { // pass in 'sensitivity' coefficient
         Serial.println("Touch ERR");
     }
@@ -204,16 +246,20 @@ void setup()
     // Serial is either via USB or via BLE in standalone mode
     Serial.begin(57600);
 
-    setupGfx();
-
     // for clock & temperature
     setupTempSensor();
+
+    setupGfx();
 }
 
 //TODO: Read this from database or current override temperature
-float getDesiredTemperatureF()
+uint8_t getDesiredTemperatureF()
 {
-    return 85.0f;
+    if (overrideTemp>0)
+      return overrideTemp;
+
+   // Read from EPROM
+    return 85;
 }
 
 void printDigits(int digits)
@@ -242,11 +288,17 @@ void printClock(void)
     Serial.println();
 }
 
+time_t last= millis();
+
 void diagnosticOutput()
-{
+{    
+    if ((now()-last)<2000)
+      return; // don't spam the console
+     // TODO: WHY IS THIS NOT BEING CALLED? 
     Serial.print(currentTemp);
     Serial.print(',');
-    printClock();
+    printClock();    
+    last=now();
 }
 
 // check if heater needs to be turned on / off
@@ -260,7 +312,7 @@ void processHeating()
         return;
     }
 
-    const float desiredTemp = getDesiredTemperatureF();
+    const uint8_t desiredTemp = getDesiredTemperatureF();
 
     // Keep heating while less than desiredTemp but only start heating
     // when swing threshold has been reached
@@ -301,6 +353,12 @@ void onToggleHeater()
     bHeaterButtonOn = !bHeaterButtonOn;
     fsfDraw(bHeaterButtonOn ? "heaton.fsf" : "heatoff.fsf",
         62, 215);
+
+    // Disabling heater also resets temperature override
+    if (!bHeaterButtonOn) {
+      overrideTemp=0; 
+      drawDesiredTemp();
+    }
     //heatoff.fsf top left corner is 62,215
 }
 
@@ -329,13 +387,35 @@ void processTouchScreen()
         return;
     }
 
+    // still dragging..
+    touchReleased = false;
+
     // Otherwise we are on circle.
     // cx=120, cy=110, radius= 90px
     //tft.fillCircle(p.x, p.y, 10, ILI9341_CYAN);
 
-    // dial is 50x50
+    float angle= atan2(110-p.y, p.x-120);
+    // map from [-Pi, Pi] to [0..2*PI]
+    if (angle<0) 
+      angle += M_PI * 2; 
+
+      // TODO: THIS MAPPING IS WRONG!
+    float percent= angle + M_PI_4; // 1/4 PI
+    if (percent>M_PI * 2)
+       percent -= M_PI * 2;
+    percent /= M_PI_2 * 3;
+    percent = 1.0 - percent;
+
+    Serial.println(percent);    
+    if (percent<0)
+      return; // invalid - we are only using a section of the whole circle
+    
+    p.x= 65*cos(angle)+120; p.y= -65*sin(angle)+110;
     drawDial(p.x, p.y);
-    touchReleased = false;
+
+    
+    overrideTemp= static_cast<int>(65.0f + percent*20.0f);
+    drawDesiredTemp();
 }
 
 void loop()
@@ -346,7 +426,13 @@ void loop()
     if (!ctp.touched()) {
         touchReleased = true;
 
-        currentTemp = getTemperatureF();
+        // read temperature and update LCD if needed
+        uint8_t newTemp = getTemperatureF();
+        if (newTemp!=currentTemp) {
+          currentTemp= newTemp;
+          drawCurrentTemp();
+        }          
+        
         processHeating();
         diagnosticOutput();
     }
