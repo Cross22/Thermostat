@@ -45,8 +45,8 @@ bool bFanButtonOn = false;
 bool bHeaterButtonOn = true;
 
 char digitFile[]= "blX.fsf";
+char dialFile[]= "dX.fsf";
 
-TS_Point dialCenter;
 
 void startTempReading() {
     onewire.reset();
@@ -175,10 +175,36 @@ void printError(const char* err)
     Serial.println(err);
 }
 
-void drawDial(int x, int y)
+// defined later on..
+void fsfDrawSub(const char* filename, uint8_t x, uint16_t y, uint8_t subx, uint8_t suby, uint8_t subw, uint8_t subh);
+
+// Index is one of the [0..20] valid dial positions
+void drawDial(uint8_t index)
 {
-    fsfDrawDial(x - 25, y - 25);
-    dialCenter.x = x; dialCenter.y = y;
+    static uint8_t previousIndex=0;  
+    if (index==previousIndex) // didn't move at all
+      return;
+  
+    // TODO: Get rid of rounding errors and calculate these coordinates instead
+    const uint8_t dialPosXy[21*2]= {74,156,65,144,58,130,55,115,56,100,60,85,67,72,78,61,90,52,105,47,120,45,135,47,150,52,162,61,173,72,180,85,184,100,185,115,182,130,175,144,166,156};
+
+    // a) First we draw background where the old dial used to be
+    // find the right frame
+    dialFile[1] = 'a'+previousIndex;
+    // look up xy coordinates
+    uint8_t x= dialPosXy[(previousIndex<<1)] - 25;
+    uint8_t y= dialPosXy[(previousIndex<<1)+1] - 25;   
+    fsfDrawSub("thermobg.fsf", x, y, x,y, 50,50);        
+
+    // b) Now draw the dial at new position  
+    // find the right frame
+    dialFile[1] = 'a'+index;
+    // look up xy coordinates
+    x= dialPosXy[(index<<1)] - 25;
+    y= dialPosXy[(index<<1)+1] - 25;   
+    fsfDrawDial(dialFile, x, y);
+
+    previousIndex= index;
 }
 
 void drawCurrentTemp() 
@@ -227,8 +253,9 @@ void setupGfx()
 
     fsfDraw("thermobg.fsf", 0, 0);
 
-    // Dial is 50x50 big
-    drawDial(100 + 25, 27 + 25);
+    // render dial in center
+    TS_Point p; p.x= 120; p.y=60;
+    onDialDrag(p);
 
     drawDesiredTemp();
     drawCurrentTemp();
@@ -386,34 +413,40 @@ void processTouchScreen()
         touchReleased = false; // touch was handled- do not allow any more clicks until touch released
         return;
     }
+    // Otherwise we are on circle.
 
     // still dragging..
     touchReleased = false;
+    onDialDrag(p);
+}
 
-    // Otherwise we are on circle.
-    // cx=120, cy=110, radius= 90px
-    //tft.fillCircle(p.x, p.y, 10, ILI9341_CYAN);
+void onDialDrag(TS_Point &p)
+{
+    // cx=120, cy=110, radius= 90px or 65px to center
 
     float angle= atan2(110-p.y, p.x-120);
     // map from [-Pi, Pi] to [0..2*PI]
     if (angle<0) 
       angle += M_PI * 2; 
 
-      // TODO: THIS MAPPING IS WRONG!
     float percent= angle + M_PI_4; // 1/4 PI
     if (percent>M_PI * 2)
        percent -= M_PI * 2;
     percent /= M_PI_2 * 3;
     percent = 1.0 - percent;
 
-    Serial.println(percent);    
     if (percent<0)
       return; // invalid - we are only using a section of the whole circle
     
     p.x= 65*cos(angle)+120; p.y= -65*sin(angle)+110;
-    drawDial(p.x, p.y);
 
-    uint8_t newTemp= static_cast<uint8_t>(65.0f + percent*20.0f);
+    // value in [0..20] we use this to pick an image
+    uint8_t newTemp= static_cast<uint8_t>(0.5f + percent*20.0f);
+
+    drawDial(newTemp);
+    
+    // map to [65..85] degrees
+    newTemp += 65;
     if (newTemp!=overrideTemp) {
       overrideTemp= newTemp;
       drawDesiredTemp();
@@ -444,40 +477,33 @@ void loop()
     }
 }
 
-void fsfDrawDial(uint8_t x, uint16_t y)
+void fsfDrawDial(const char* filename, uint8_t x, uint16_t y)
 {
-    static File bmpFile;
-    static bool initialized = false;
+    File bmpFile;
     // buffer for fast file reading
     uint16_t scanline[50];
 
-    static uint16_t  w, h;
-    uint16_t rgb565;
     uint32_t startTime = millis();
-    if (initialized) {
-        bmpFile.seek(4);
+
+    if ((bmpFile = SD.open(filename)) == NULL) {
+        Serial.println("ERR-Dial");
+        return;
     }
-    else {
-        if ((bmpFile = SD.open("dial.fsf")) == NULL) {
-            Serial.println("ERR-Dial");
-            return;
-        }
-        w = read16(bmpFile);
-        h = read16(bmpFile);
-        initialized = true;
-    }
+    
+    // skip width/height field
+    bmpFile.read(scanline, 4); 
 
     // Set TFT address window to clipped image bounds
-    tft.setAddrWindow(x, y, x + w - 1, y + h - 1);
+    tft.setAddrWindow(x, y, x + 50 - 1, y + 50 - 1);
 
-    for (uint16_t row = 0; row < h; row++) { // For each scanline...
-        bmpFile.read(scanline, w << 1);
-        tft.pushColors(scanline, w);
+    for (uint16_t row = 0; row < 50; row++) { // For each scanline...
+        bmpFile.read(scanline, 50 << 1);
+        tft.pushColors(scanline, 50);
     } // end scanline
-      //    Serial.print(F("Loaded in "));
-      //    Serial.print(millis() - startTime);
-      //    Serial.println(" ms");
-      //bmpFile.close();  
+          Serial.print(F("Dialtime "));
+          Serial.print(millis() - startTime);
+          Serial.println(" ms");
+    bmpFile.close();  
 }
 
 void fsfDraw(const char* filename, uint8_t x, uint16_t y)
@@ -516,6 +542,54 @@ void fsfDraw(const char* filename, uint8_t x, uint16_t y)
       //    Serial.println(" ms");
     bmpFile.close();
 }
+
+// draw to position x,y but only use source rectangle subx/suby/subw/subh
+void fsfDrawSub(const char* filename, uint8_t x, uint16_t y, 
+                uint8_t subx, uint8_t suby, uint8_t subw, uint8_t subh)
+{
+    File bmpFile;
+    // buffer for fast file reading
+    uint16_t scanline[48];
+
+    uint16_t  w, h;
+    uint16_t rgb565;
+    uint32_t startTime = millis();
+
+    if ((bmpFile = SD.open(filename)) == NULL) {
+        Serial.print("ERR:");
+        Serial.println(filename);
+        return;
+    }
+    w = read16(bmpFile);
+    h = read16(bmpFile);
+
+    // Set TFT address window to clipped image bounds
+    tft.setAddrWindow(x, y, 
+                      x + subw - 1, y + subh - 1);
+
+    // For each scanline...
+    for (uint16_t row = 0; row < subh; row++) 
+    { 
+        // w/h field plus sub region top left offset
+        const uint32_t words= (uint32_t)2 + (suby+row)*w + subx;
+        bmpFile.seek(  words << 1 );
+      
+        // break up full scanline into smaller chunks
+        uint8_t col = 0;
+        while (col < subw) {
+            const uint8_t toRead = min(subw - col, sizeof(scanline) / sizeof(uint16_t));
+            bmpFile.read(scanline, toRead << 1);
+            tft.pushColors(scanline, toRead);
+            col += toRead;
+        }
+    } // end scanline
+          Serial.print(F("Subtime: "));
+          Serial.print(millis() - startTime);
+          Serial.println(" ms");
+    bmpFile.close();
+}
+
+
 
 // These read 16- and 32-bit types from the SD card file.
 // BMP data is stored little-endian, Arduino is little-endian too.
