@@ -510,11 +510,10 @@ void fsfDraw(const char* filename, uint8_t x, uint16_t y)
 {
     File bmpFile;
     // buffer for fast file reading
-    uint16_t scanline[48];
+    uint16_t scanline[50];
 
     uint16_t  w, h;
-    uint16_t rgb565;
-    uint32_t startTime = millis();
+//    uint32_t startTime = millis();
 
     if ((bmpFile = SD.open(filename)) == NULL) {
         Serial.print("ERR:");
@@ -552,7 +551,6 @@ void fsfDrawSub(const char* filename, uint8_t x, uint16_t y,
     uint16_t scanline[48];
 
     uint16_t  w, h;
-    uint16_t rgb565;
     uint32_t startTime = millis();
 
     if ((bmpFile = SD.open(filename)) == NULL) {
