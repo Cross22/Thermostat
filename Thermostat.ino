@@ -1,29 +1,32 @@
-#include <Time.h> //http://www.arduino.cc/playground/Code/Time
+#include <ILI9341.h>
+
+//http://www.arduino.cc/playground/Code/Time
+#include <Time.h>  
+#include <TimeLib.h>
+
 #include <Wire.h> //http://arduino.cc/en/Reference/Wire // I2C
 #include <SPI.h>
-#include <SD.h>
+
 #include <OneWire.h>
-#include "Adafruit_ILI9341.h" // Hardware-specific library
 #include <Adafruit_FT6206.h>
+#include "FS.h" // Flash SPIFF file system (3MB)
+
+using namespace std;
 
 // The FT6206 cap touch uses hardware I2C (SCL/SDA)
 Adafruit_FT6206 ctp = Adafruit_FT6206();
 
-
 // TFT display and SD card will share the hardware SPI interface.
-// Hardware SPI pins are specific to the Arduino board type and
-// cannot be remapped to alternate pins.  For Arduino Uno,
-// Duemilanove, etc., pin 11 = MOSI, pin 12 = MISO, pin 13 = SCK
-#define TFT_DC 9
-#define TFT_CS 10
-#define SD_CS 4
+// SCK= 14, MISO=12, MOSI=13, SCS= 15
+#define TFT_DC 2
+#define TFT_CS 15
+//#define SD_CS 16
 // One-Wire sensor interface
-#define TEMP_PIN A2
+#define TEMP_PIN 5
 
-// Heater relay on Pin ADC3 is active low and needs to be set to high ASAP
-// (Note that A6 and A7 cannot be set to OUTPUT mode)
-#define HEATER_RELAY A3
-#define FAN_RELAY A2
+// Heater relay on Pin 4 is active low and needs to be set to high ASAP
+#define HEATER_RELAY 4
+#define FAN_RELAY 0
 #define DISABLE_RELAY HIGH
 #define ENABLE_RELAY LOW
 
@@ -33,8 +36,8 @@ Adafruit_FT6206 ctp = Adafruit_FT6206();
 #define CMD_WRITESCRATCH 0x4E
 #define CMD_READSCRATCH 0xBE
 
-OneWire  onewire(TEMP_PIN);  // on pin A2 (needs a 4.7K pull up resistor !)
-Adafruit_ILI9341 tft = Adafruit_ILI9341(TFT_CS, TFT_DC);
+OneWire  onewire(TEMP_PIN);  // Needs a 4.7K pull up resistor !
+ILI9341 tft = ILI9341(TFT_CS, TFT_DC);
 
 // currentTemp is latest reading from sensor
 // overrideTemp is either 0 or something selected via dial on screen
@@ -245,12 +248,11 @@ void setupGfx()
 {
     tft.begin();
 
-    Serial.print("SD card?");
-    if (!SD.begin(SD_CS)) {
+    Serial.print("FS ready?");
+    if (!SPIFFS.begin()) {
         Serial.println("ERR");
     }
     Serial.println("OK");
-
     fsfDraw("thermobg.fsf", 0, 0);
 
     // render dial in center
@@ -270,8 +272,8 @@ void setup()
     // Heater relay is active low and needs to be set to high ASAP !
     setupRelays();
 
-    // Serial is either via USB or via BLE in standalone mode
-    Serial.begin(57600);
+    // Serial for debugging purposes only
+    Serial.begin(115200);
 
     // for clock & temperature
     setupTempSensor();
@@ -485,19 +487,19 @@ void fsfDrawDial(const char* filename, uint8_t x, uint16_t y)
 
     uint32_t startTime = millis();
 
-    if ((bmpFile = SD.open(filename)) == NULL) {
+    if ((bmpFile = SPIFFS.open(filename,"r")) == NULL) {
         Serial.println("ERR-Dial");
         return;
     }
     
     // skip width/height field
-    bmpFile.read(scanline, 4); 
+    bmpFile.read((uint8_t*)(scanline), 4); 
 
     // Set TFT address window to clipped image bounds
     tft.setAddrWindow(x, y, x + 50 - 1, y + 50 - 1);
 
     for (uint16_t row = 0; row < 50; row++) { // For each scanline...
-        bmpFile.read(scanline, 50 << 1);
+        bmpFile.read((uint8_t*)(scanline), 50 << 1);
         tft.pushColors(scanline, 50);
     } // end scanline
           Serial.print(F("Dialtime "));
@@ -515,7 +517,7 @@ void fsfDraw(const char* filename, uint8_t x, uint16_t y)
     uint16_t  w, h;
 //    uint32_t startTime = millis();
 
-    if ((bmpFile = SD.open(filename)) == NULL) {
+    if ((bmpFile = SPIFFS.open(filename, "r")) == NULL) {
         Serial.print("ERR:");
         Serial.println(filename);
         return;
@@ -527,11 +529,11 @@ void fsfDraw(const char* filename, uint8_t x, uint16_t y)
     tft.setAddrWindow(x, y, x + w - 1, y + h - 1);
 
     for (uint16_t row = 0; row < h; row++) { // For each scanline...
-        uint8_t col = 0;
+        uint16_t col = 0;
         // break up full scanline into smaller chunks
         while (col < w) {
-            const uint8_t toRead = min(w - col, sizeof(scanline) / sizeof(uint16_t));
-            bmpFile.read(scanline, toRead << 1);
+            const uint8_t toRead = min( unsigned(w - col), sizeof(scanline) / sizeof(uint16_t));
+            bmpFile.read((uint8_t*)(scanline), toRead << 1);
             tft.pushColors(scanline, toRead);
             col += toRead;
         }
@@ -546,14 +548,15 @@ void fsfDraw(const char* filename, uint8_t x, uint16_t y)
 void fsfDrawSub(const char* filename, uint8_t x, uint16_t y, 
                 uint8_t subx, uint8_t suby, uint8_t subw, uint8_t subh)
 {
-    File bmpFile;
     // buffer for fast file reading
     uint16_t scanline[48];
 
     uint16_t  w, h;
     uint32_t startTime = millis();
 
-    if ((bmpFile = SD.open(filename)) == NULL) {
+    File bmpFile= SPIFFS.open(filename, "r");
+
+    if (bmpFile) {
         Serial.print("ERR:");
         Serial.println(filename);
         return;
@@ -570,13 +573,13 @@ void fsfDrawSub(const char* filename, uint8_t x, uint16_t y,
     { 
         // w/h field plus sub region top left offset
         const uint32_t words= (uint32_t)2 + (suby+row)*w + subx;
-        bmpFile.seek(  words << 1 );
+        bmpFile.seek(  words << 1, SeekCur );
       
         // break up full scanline into smaller chunks
         uint8_t col = 0;
         while (col < subw) {
-            const uint8_t toRead = min(subw - col, sizeof(scanline) / sizeof(uint16_t));
-            bmpFile.read(scanline, toRead << 1);
+            const uint8_t toRead = min(unsigned(subw - col), sizeof(scanline) / sizeof(uint16_t));
+            bmpFile.read((uint8_t*)(scanline), toRead << 1);
             tft.pushColors(scanline, toRead);
             col += toRead;
         }
