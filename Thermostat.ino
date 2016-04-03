@@ -1,28 +1,22 @@
-#include <ILI9341.h>
-
-//http://www.arduino.cc/playground/Code/Time
-#include <Time.h>  
+#include <Time.h>  //http://www.arduino.cc/playground/Code/Time
 #include <TimeLib.h>
-
 #include <Wire.h> //http://arduino.cc/en/Reference/Wire // I2C
 #include <SPI.h>
-
 #include <OneWire.h>
-#include <Adafruit_FT6206.h>
+#include <XPT2046_Touchscreen.h>
+#include "ILI9341/ILI9341.h"
 #include "FS.h" // Flash SPIFF file system (3MB)
 
 using namespace std;
-
-// The FT6206 cap touch uses hardware I2C (SCL/SDA)
-Adafruit_FT6206 ctp = Adafruit_FT6206();
-
-// TFT display and SD card will share the hardware SPI interface.
+// TFT
 // SCK= 14, MISO=12, MOSI=13, SCS= 15
 #define TFT_DC 2
 #define TFT_CS 15
 //#define SD_CS 16
 // One-Wire sensor interface
 #define TEMP_PIN 5
+
+#define TOUCH_CS 16
 
 // Heater relay on Pin 4 is active low and needs to be set to high ASAP
 #define HEATER_RELAY 4
@@ -36,6 +30,8 @@ Adafruit_FT6206 ctp = Adafruit_FT6206();
 #define CMD_WRITESCRATCH 0x4E
 #define CMD_READSCRATCH 0xBE
 
+XPT2046_Touchscreen touch(TOUCH_CS);
+
 OneWire  onewire(TEMP_PIN);  // Needs a 4.7K pull up resistor !
 ILI9341 tft = ILI9341(TFT_CS, TFT_DC);
 
@@ -47,8 +43,8 @@ uint8_t overrideTemp = 0;
 bool bFanButtonOn = false;
 bool bHeaterButtonOn = true;
 
-char digitFile[]= "blX.fsf";
-char dialFile[]= "dX.fsf";
+char digitFile[]= "/blX.fsf";
+char dialFile[]= "/dX.fsf";
 
 
 void startTempReading() {
@@ -88,7 +84,6 @@ uint8_t parseTemperature() {
 }
 
 void setupTempSensor(void) {
-    byte data[9];
     startTempReading();
     while (!onewire.read())
         ; // wait until it's done
@@ -101,10 +96,11 @@ void setupTempSensor(void) {
 
 // Returns fahrenheit gets updated every 700ms or so
 uint8_t getTemperatureF() {
+  Serial.println("Wait for temp reading");
     // Still busy converting?
     if (!onewire.read())
         return currentTemp;
-
+Serial.println("New temp found");
     uint8_t f = parseTemperature();
 
     // start next cycle
@@ -131,10 +127,10 @@ void processNetwork()
             break;
         }
         case 'Z': {
-            byte len = Serial.read();
+/*            byte len = Serial.read();
             byte buf[len];
             for (int i = 0; i < len; i++)
-                buf[i] = Serial.read();
+                buf[i] = Serial.read();*/
             break;
         }
         }
@@ -193,15 +189,15 @@ void drawDial(uint8_t index)
 
     // a) First we draw background where the old dial used to be
     // find the right frame
-    dialFile[1] = 'a'+previousIndex;
+    dialFile[2] = 'a'+previousIndex;
     // look up xy coordinates
     uint8_t x= dialPosXy[(previousIndex<<1)] - 25;
     uint8_t y= dialPosXy[(previousIndex<<1)+1] - 25;   
-    fsfDrawSub("thermobg.fsf", x, y, x,y, 50,50);        
+    fsfDrawSub("/thermobg.fsf", x, y, x,y, 50,50);        
 
     // b) Now draw the dial at new position  
     // find the right frame
-    dialFile[1] = 'a'+index;
+    dialFile[2] = 'a'+index;
     // look up xy coordinates
     x= dialPosXy[(index<<1)] - 25;
     y= dialPosXy[(index<<1)+1] - 25;   
@@ -217,12 +213,12 @@ void drawCurrentTemp()
    const uint8_t ones=iTemp%10;
 
    // update filename to match digit
-   digitFile[0]= 'b'; digitFile[1]= 'l';
-   digitFile[2]= '0' + tens;
+   digitFile[1]= 'b'; digitFile[2]= 'l';
+   digitFile[3]= '0' + tens;
    fsfDraw(digitFile, 84, 276 );
 
-   digitFile[0]= 'b'; digitFile[1]= 'r';
-   digitFile[2]= '0' + ones;
+   digitFile[1]= 'b'; digitFile[2]= 'r';
+   digitFile[3]= '0' + ones;
    fsfDraw(digitFile, 113, 276 );
 }
 
@@ -235,12 +231,12 @@ void drawDesiredTemp()
     // TODO: Generate 't' image files!
     
    // update filename to match digit
-   digitFile[0]= 'b'; digitFile[1]= 'l';
-   digitFile[2]= '0' + tens;
+   digitFile[1]= 'b'; digitFile[2]= 'l';
+   digitFile[3]= '0' + tens;
    fsfDraw(digitFile, 84, 90 );
 
-   digitFile[0]= 'b'; digitFile[1]= 'r';
-   digitFile[2]= '0' + ones;
+   digitFile[1]= 'b'; digitFile[2]= 'r';
+   digitFile[3]= '0' + ones;
    fsfDraw(digitFile, 113, 90 );  
 }
 
@@ -253,7 +249,7 @@ void setupGfx()
         Serial.println("ERR");
     }
     Serial.println("OK");
-    fsfDraw("thermobg.fsf", 0, 0);
+    fsfDraw("/thermobg.fsf", 0, 0);
 
     // render dial in center
     TS_Point p; p.x= 120; p.y=60;
@@ -262,7 +258,7 @@ void setupGfx()
     drawDesiredTemp();
     drawCurrentTemp();
 
-    if (!ctp.begin(40)) { // pass in 'sensitivity' coefficient
+    if (!touch.begin()) { // pass in 'sensitivity' coefficient
         Serial.println("Touch ERR");
     }
 }
@@ -321,8 +317,8 @@ time_t last= millis();
 
 void diagnosticOutput()
 {    
-    if ((now()-last)<2000)
-      return; // don't spam the console
+    //if ((now()-last)<2000)
+      //return; // don't spam the console
      // TODO: WHY IS THIS NOT BEING CALLED? 
     Serial.print(currentTemp);
     Serial.print(',');
@@ -371,7 +367,7 @@ void onToggleFan()
 {
     bFanButtonOn = !bFanButtonOn;
     enableFan(bFanButtonOn); // trigger relay
-    fsfDraw(bFanButtonOn ? "fanon.fsf" : "fanoff.fsf",
+    fsfDraw(bFanButtonOn ? "/fanon.fsf" : "/fanoff.fsf",
         151, 218);
     //fanoff.fsf TL is 151,218
 }
@@ -380,7 +376,7 @@ void onToggleFan()
 void onToggleHeater()
 {
     bHeaterButtonOn = !bHeaterButtonOn;
-    fsfDraw(bHeaterButtonOn ? "heaton.fsf" : "heatoff.fsf",
+    fsfDraw(bHeaterButtonOn ? "/heaton.fsf" : "/heatoff.fsf",
         62, 215);
 
     // Disabling heater also resets temperature override
@@ -396,7 +392,7 @@ bool touchReleased = true;
 
 void processTouchScreen()
 {
-    TS_Point p = ctp.getPoint();
+    TS_Point p = touch.getPoint();
     // flip it around to match the screen.
     p.x = map(p.x, 0, 240, 240, 0);
     p.y = map(p.y, 0, 320, 320, 0);
@@ -457,23 +453,31 @@ void onDialDrag(TS_Point &p)
 
 void loop()
 {
+  Serial.println("ProcessNetwork");
     processNetwork();
 
+    bool touched= touch.touched();
+    
     // If there is no touch do regular temperature processing
-    if (!ctp.touched()) {
+    if (!touched) {
+      Serial.println("touched? false");
         touchReleased = true;
 
         // read temperature and update LCD if needed
         uint8_t newTemp = getTemperatureF();
         if (newTemp!=currentTemp) {
           currentTemp= newTemp;
+          Serial.println("drawCurrentTemp");
           drawCurrentTemp();
         }          
-        
+
+        Serial.println("processHeating");
         processHeating();
+        Serial.println("diagnostic");
         diagnosticOutput();
     }
     else {
+        Serial.println("touched? true");
         // interactive mode - don't bother reading temperature
         processTouchScreen();
     }
@@ -481,13 +485,13 @@ void loop()
 
 void fsfDrawDial(const char* filename, uint8_t x, uint16_t y)
 {
-    File bmpFile;
+    File bmpFile= SPIFFS.open(filename,"r");
     // buffer for fast file reading
     uint16_t scanline[50];
 
     uint32_t startTime = millis();
 
-    if ((bmpFile = SPIFFS.open(filename,"r")) == NULL) {
+    if (!bmpFile) {
         Serial.println("ERR-Dial");
         return;
     }
@@ -510,14 +514,14 @@ void fsfDrawDial(const char* filename, uint8_t x, uint16_t y)
 
 void fsfDraw(const char* filename, uint8_t x, uint16_t y)
 {
-    File bmpFile;
+    File bmpFile= SPIFFS.open(filename, "r");
     // buffer for fast file reading
     uint16_t scanline[50];
 
     uint16_t  w, h;
 //    uint32_t startTime = millis();
 
-    if ((bmpFile = SPIFFS.open(filename, "r")) == NULL) {
+    if (!bmpFile) {
         Serial.print("ERR:");
         Serial.println(filename);
         return;
@@ -551,18 +555,18 @@ void fsfDrawSub(const char* filename, uint8_t x, uint16_t y,
     // buffer for fast file reading
     uint16_t scanline[48];
 
-    uint16_t  w, h;
+    uint16_t  w;
     uint32_t startTime = millis();
 
     File bmpFile= SPIFFS.open(filename, "r");
 
-    if (bmpFile) {
+    if (!bmpFile) {
         Serial.print("ERR:");
         Serial.println(filename);
         return;
     }
     w = read16(bmpFile);
-    h = read16(bmpFile);
+    read16(bmpFile); // seek past height value
 
     // Set TFT address window to clipped image bounds
     tft.setAddrWindow(x, y, 
