@@ -392,8 +392,12 @@ void onToggleHeater()
 bool touchReleased = true;
 
 void processTouchScreen()
-{
+{  
   TS_Point p = touch.getPoint();
+  // Recently released ?
+  if (!p.isValid()) 
+    return;
+  
   // flip it around to match the screen.
   p.x = map(p.x, 3733, 260, 0, 240);
   p.y = map(p.y, 288, 3752, 0, 320);
