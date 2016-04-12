@@ -3,7 +3,7 @@
 #include <Wire.h> //http://arduino.cc/en/Reference/Wire // I2C
 #include <SPI.h>
 #include <OneWire.h>
-#include <XPT2046_Touchscreen.h>
+#include "XPT2046_Touchscreen/XPT2046_Touchscreen.h"
 #include "ILI9341/ILI9341.h"
 #include "FS.h" // Flash SPIFF file system (3MB)
 
@@ -64,12 +64,12 @@ public:
     
     tempF= newTemp;
      
-    // print digits
-    drawTargetTemp();
-
     // map [65..85] degrees to [0..20]
     // value in [0..20] we use this to pick an image
     drawDial(newTemp-65);
+
+    // print digits
+    drawTargetTemp();    
   }
 
   // Reset target temp to current scheduled temperature
@@ -273,11 +273,12 @@ void drawTargetTemp()
 
     // TODO: Generate 't' image files!
 
-    // update filename to match digit
+    // update filename to match digit    
     digitFile[1] = 'b'; digitFile[2] = 'l';
     digitFile[3] = '0' + tens;
     fsfDraw(digitFile, 84, 90);
-
+    oldOnes= ones;
+    
     digitFile[1] = 'b'; digitFile[2] = 'r';
     digitFile[3] = '0' + ones;
     fsfDraw(digitFile, 113, 90);
@@ -474,12 +475,10 @@ void onDialDrag(TS_Point &p)
     percent /= M_PI_2 * 3;
     percent = 1.0 - percent;
 
-    //Serial.print("onDialDrag- percent: "); Serial.println(percent);
+    Serial.print("onDialDrag- percent: "); Serial.println(percent);
 
     if (percent < 0)
         return; // invalid - we are only using a section of the whole circle
-
-    p.x = 65 * cos(angle) + 120; p.y = -65 * sin(angle) + 110;
 
     // value in [0..20] we use this to pick an image
     uint8_t newTemp = static_cast<uint8_t>(0.5f + percent * 20.0f);
